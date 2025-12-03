@@ -5,17 +5,21 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
-	"time"
 	"os"
+	"strconv"
+	"sync"
+	"time"
+
+	"conversion-bot/config"
+
 	"github.com/joho/godotenv"
 )
 
-// ------ Configuration ------
-const (
-	// BotToken   = os.Getenv("TELEGRAM_BOT_TOKEN")
-	// ChatID     = os.Getenv("TELEGRAM_CHAT_ID")
-	TargetRate = 1.20 // Target USD to AUD rate to trigger notification
+// global mutex to protect rate access
+var (
+	currentRate float64
+	lastUpdated time.Time
+	mu          sync.RWMutex // mutex to protect access to currentRate and lastUpload
 )
 
 // Represents a single currency in the list (AUD, GBP, etc.)
@@ -70,7 +74,6 @@ func sendTelegram(text string) error {
 		return fmt.Errorf("telegram bot token or chat ID not set in environment variables")
 	}
 
-	
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage?chat_id=%s&text=%s", botToken, chatID, text)
 	resp, err := http.Get(url)
 	if err != nil {
@@ -88,23 +91,74 @@ func main() {
 		return
 	}
 
+	cfg := config.Initialize()
 
-	fmt.Println("--- Starting Currency Checker ---")
+	fmt.Printf("--- Starting Currency Checker Bot (%v) ---\n", cfg.CheckInterval)
+
+	// run check immediately, then at intervals
+	checkAndNotify(cfg) // Initial check
+
+	//  starts the ticker (periodic checks at intervals) in a BACKGROUND thread using go routine
+	go func() {
+		ticker := time.NewTicker(cfg.CheckInterval)
+		// defer ticker.Stop()
+
+		// this loop runs at each tick
+		for range ticker.C {
+			checkAndNotify(cfg)
+		}
+	}()
+
+	// start the web server in a main thread
+	http.HandleFunc("/api/rate", handleGetRate)
+	fmt.Println("Server started at :8080")
+	if err := http.ListenAndServe(":8080", nil); err != nil {
+		fmt.Printf("Error starting server: %v\n", err)
+	}
+
+}
+
+func checkAndNotify(cfg config.Config) {
+	timestamp := time.Now().Format("15:04:05") // for logging
+	fmt.Printf("[%s] Checking rates ...", timestamp)
 
 	rate, err := getRate()
 	if err != nil {
-		fmt.Printf("Error retrieving rate: %v\n", err)
+		fmt.Printf(" Error retrieving rate: %v\n", err)
 		return
 	}
 
+	// update global rate and timestamp with mutex
+	mu.Lock()
+	currentRate = rate
+	lastUpdated = time.Now()
+	mu.Unlock()
+
+	fmt.Printf(" Current USD to AUD rate: %.4f\n", rate)
+
 	// Telegram alert logic
-	if rate > TargetRate {
+	if rate > cfg.TargetRate {
 		msg := fmt.Sprintf("🚨 RATE ALERT! 1 USD = %.4f AUD", rate)
 		sendTelegram(msg)
-		fmt.Println("Alert sent to Telegram!")
+		fmt.Println(" Alert sent to Telegram!")
 	} else {
-		fmt.Println("Rate is too low. No alert sent.")
+		fmt.Println(" Rate is too low. No alert sent.")
 	}
+}
 
-	fmt.Printf("Current USD to AUD rate: %.4f\n", rate)
+// api handler for /api/rate
+func handleGetRate(w http.ResponseWriter, r *http.Request) {
+	// enable cors (so client from a different origin can access)
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Content-Type", "application/json")
+
+	mu.RLock() // read lock
+	rate := currentRate
+	updated := lastUpdated
+	mu.RUnlock()
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"rate":        rate,
+		"lastUpdated": updated.Format(time.RFC3339),
+	})
 }
