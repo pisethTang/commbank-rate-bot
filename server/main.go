@@ -87,8 +87,8 @@ func main() {
 	// Load environment variables from .env file
 	err := godotenv.Load()
 	if err != nil {
-		fmt.Println("Error loading .env file")
-		return
+		// fmt.Println("Error loading .env file")
+		fmt.Println("Warning: .env file not found. Using system environment variables.") // return
 	}
 
 	cfg := config.Initialize()
@@ -109,11 +109,16 @@ func main() {
 		}
 	}()
 
+	// health check endpoint
+	http.HandleFunc("/health", handleHealth)
 	// start the web server in a main thread
 	http.HandleFunc("/api/rate", handleGetRate)
-	fmt.Println("Server started at :8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
-		fmt.Printf("Error starting server: %v\n", err)
+	// 4. THE BLOCKING CALL (must be last)
+	fmt.Println("Server started at 0.0.0.0:8080")
+	if err := http.ListenAndServe("0.0.0.0:8080", nil); err != nil {
+		// Use log.Fatal to ensure the exit code isn't 0 if it fails
+		fmt.Printf("CRITICAL: Server failed: %v\n", err)
+		os.Exit(1)
 	}
 
 }
@@ -160,5 +165,16 @@ func handleGetRate(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"rate":        rate,
 		"lastUpdated": updated.Format(time.RFC3339),
+	})
+}
+
+// Handler for /health
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "UP",
+		"message": "Conversion Bot is healthy 🚀",
+		"time":    time.Now().Format(time.RFC3339),
 	})
 }

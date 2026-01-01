@@ -11,7 +11,7 @@ type Config struct {
 // Initialize returns the configuration
 func Initialize() Config {
 	return Config{
-		TargetRate:    1.20,             // Target USD to AUD rate to trigger notification
-		CheckInterval: 60 * time.Minute, // Interval between checks
+		TargetRate:    1.46,             // Target USD to AUD rate to trigger notification
+		CheckInterval: 30 * time.Minute, // Interval between checks
 	}
 }
